@@ -4,6 +4,8 @@
 
 [Türkçe](README.tr.md)
 
+> This is a fork of [KoPlay](https://github.com/orkunseyman/koplay) by [orkunseyman](https://github.com/orkunseyman), under the same AGPL-3.0 license. It adds a [Music tab](#music-tab-this-fork) to KOReader's bottom menu.
+
 https://github.com/user-attachments/assets/9ffb7b35-4c38-42ac-983f-aa501ccaa0cf
 
 <table>
@@ -88,6 +90,17 @@ Your browser opens Spotify's consent page. Once you accept, the script writes `k
   | KoPlay: now playing / library | Opens that screen |
 
 - **Settings:** the refresh interval (5–30 s while playing), and whether to keep the screen awake while the now playing screen is open.
+
+## Music tab (this fork)
+
+Inside a book, swipe up from the bottom of the screen to open KOReader's bottom menu. The last tab, the one with the music note, shows the current track and three buttons: previous, play/pause and next.
+
+- Tap the song name to open the now playing screen with the cover art.
+- The track is fetched when you open the tab, right after you press a button, and every refresh interval while the tab stays on screen, so songs changed on your phone show up. Nothing runs once the bottom menu is closed.
+- If Wi-Fi is off, the line says "No connection". A button press brings Wi-Fi up the same way KoPlay's gestures do.
+- Works in reflowable books (EPUB and similar) and in PDFs.
+- Turn it off in Tools → KoPlay → Settings → **Music tab in the bottom menu**.
+- For the icon, copy `icons/music.svg` from this repo to `koreader/icons/` on your e-reader, then restart KOReader. Without it, the tab shows KOReader's "icon not found" picture.
 
 ## Good to know
 

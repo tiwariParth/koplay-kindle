@@ -23,6 +23,7 @@ local _ = require("koplayl10n")
 
 local KoPlayApi = require("koplayapi")
 local KoPlayLibrary = require("koplaylibrary")
+local KoPlayMusicTab = require("koplaymusictab")
 local KoPlayView = require("koplayview")
 
 local IDLE_INTERVAL = 30 -- seconds between polls when paused / nothing playing
@@ -68,7 +69,10 @@ end
 function KoPlay:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    KoPlayMusicTab.install(self)
 end
+
+function KoPlay:onKoPlayMusicTab(action) return KoPlayMusicTab.onButton(self, action) end
 
 function KoPlay:getInterval()
     return G_reader_settings:readSetting("koplay_poll_interval", 10)
@@ -91,6 +95,14 @@ function KoPlay:addToMainMenu(menu_items)
             text = _("Keep screen awake while open"),
             checked_func = function() return G_reader_settings:nilOrTrue("koplay_keep_awake") end,
             callback = function() G_reader_settings:flipNilOrTrue("koplay_keep_awake") end,
+        },
+        {
+            text = _("Music tab in the bottom menu"),
+            checked_func = function() return G_reader_settings:nilOrTrue("koplay_music_tab") end,
+            callback = function()
+                G_reader_settings:flipNilOrTrue("koplay_music_tab")
+                KoPlayMusicTab.apply(self)
+            end,
         },
     }
     local function libraryItem(text, open)
@@ -158,8 +170,11 @@ end
 -- (the menu may build its items more than once, e.g. for menu search).
 function KoPlay:refreshMenuState(force)
     if not force and self.menu_state_at and os.time() - self.menu_state_at < 5 then return end
-    if not KoPlayApi:hasAuth() or not NetworkMgr:isOnline() then return end
-    self.menu_state = KoPlayApi:getPlayback(0) or self.menu_state
+    -- menu_error: why the last refresh failed, nil when it worked (shown by the Music tab)
+    if not KoPlayApi:hasAuth() then self.menu_error = "no_auth" return end
+    if not NetworkMgr:isOnline() then self.menu_error = "network" return end
+    local state, err = KoPlayApi:getPlayback(0)
+    self.menu_state, self.menu_error = state or self.menu_state, err
     self.menu_state_at = os.time()
 end
 
@@ -209,15 +224,15 @@ function KoPlay:checkAuth()
 end
 
 function KoPlay:onKoPlayNowPlaying()
-    if self.view then return true end
+    if self.now_playing then return true end
     if not self:checkAuth() then return true end
-    self.view = KoPlayView:new{
+    self.now_playing = KoPlayView:new{
         on_control = function(action) self:control(action) end,
         on_close = function() self:onViewClosed() end,
         on_library = function() self:onKoPlayLibrary() end,
     }
-    self.view:update{ message = _("Connecting…"), hint = "" }
-    UIManager:show(self.view, "full")
+    self.now_playing:update{ message = _("Connecting…"), hint = "" }
+    UIManager:show(self.now_playing, "full")
     self:setKeepAwake(true)
     self.poll_task = function() self:poll() end
     NetworkMgr:runWhenOnline(self.poll_task)
@@ -232,7 +247,7 @@ function KoPlay:onKoPlayLibrary(then_open)
             plugin = self,
             on_close = function()
                 -- catch up on whatever was started from the library
-                if self.view then self:schedule(0.5) end
+                if self.now_playing then self:schedule(0.5) end
             end,
         }
     end
@@ -280,7 +295,7 @@ end
 function KoPlay:onViewClosed()
     if self.poll_task then UIManager:unschedule(self.poll_task) end
     self.poll_task = nil
-    self.view = nil
+    self.now_playing = nil
     self.state = nil
     self.cover_url = nil
     self:setKeepAwake(false)
@@ -294,7 +309,7 @@ end
 
 function KoPlay:loadCover(url)
     if url == self.cover_url then return false end
-    local size = self.view:getCoverSize()
+    local size = self.now_playing:getCoverSize()
     local image
     if url and size > 0 then
         local data = KoPlayApi:download(url)
@@ -305,25 +320,25 @@ function KoPlay:loadCover(url)
     end
     -- remember the url only once it worked, so a failed download is retried next poll
     if image or not url then self.cover_url = url end
-    if not image and not self.view.cover then return false end -- placeholder already showing
-    self.view:setCover(image)
+    if not image and not self.now_playing.cover then return false end -- placeholder already showing
+    self.now_playing:setCover(image)
     return true
 end
 
 function KoPlay:showError(err)
     local title, hint = self:errorLines(err)
-    self.view:update{ state = self.state, message = title, hint = hint }
-    self.view:refresh(false)
+    self.now_playing:update{ state = self.state, message = title, hint = hint }
+    self.now_playing:refresh(false)
 end
 
 function KoPlay:poll()
-    if not self.view then return end
+    if not self.now_playing then return end
     if self.library and self.library.menu then
         -- the library covers the view: don't spend network or refreshes on it
         return self:schedule(IDLE_INTERVAL)
     end
-    local state, err = KoPlayApi:getPlayback(self.view:getCoverSize())
-    if not self.view then return end -- closed while we were blocked on the network
+    local state, err = KoPlayApi:getPlayback(self.now_playing:getCoverSize())
+    if not self.now_playing then return end -- closed while we were blocked on the network
     if not state then
         logger.warn("KoPlay: poll failed", err)
         self:showError(err)
@@ -335,10 +350,10 @@ function KoPlay:poll()
     local track_changed = not self.state or self.state.id ~= state.id or (self.state.idle ~= state.idle)
     local cover_changed = self:loadCover(not state.idle and state.cover_url or nil)
     self.state = state
-    self.menu_state, self.menu_state_at = state, os.time()
-    self.view:update{ state = state }
+    self.menu_state, self.menu_state_at, self.menu_error = state, os.time(), nil
+    self.now_playing:update{ state = state }
     -- A full (flashing) refresh only when the picture changes, to clear e-ink ghosting
-    self.view:refresh(track_changed or cover_changed)
+    self.now_playing:refresh(track_changed or cover_changed)
 
     local delay = IDLE_INTERVAL
     if state.is_playing then
@@ -358,7 +373,7 @@ end
 function KoPlay:startPlayback(fn, on_success, open_view)
     local function done()
         if on_success then on_success() end
-        if self.view then
+        if self.now_playing then
             self:schedule(SETTLE_DELAY)
         elseif open_view then
             self:onKoPlayNowPlaying()
@@ -401,14 +416,14 @@ end
 function KoPlay:control(action, from_gesture)
     local s = self.state
     if action == "toggle" then
-        if not self.view then
+        if not self.now_playing then
             -- no polled state to go by: ask Spotify
             s = KoPlayApi:getPlayback(0)
         end
         action = (s and not s.idle and s.is_playing) and "pause" or "play"
     end
     local function report()
-        if from_gesture and not self.view then
+        if from_gesture and not self.now_playing then
             UIManager:scheduleIn(SETTLE_DELAY, function() self:toastCurrentTrack() end)
         end
     end
@@ -433,7 +448,7 @@ function KoPlay:control(action, from_gesture)
     end
     if action == "pause" then
         self:setPlayingLocally(false)
-        if from_gesture and not self.view then self:toast(_("Paused")) end
+        if from_gesture and not self.now_playing then self:toast(_("Paused")) end
     else
         report()
     end
@@ -443,14 +458,14 @@ end
 -- Optimistic update for play/pause so the button flips immediately
 function KoPlay:setPlayingLocally(playing)
     local s = self.state
-    if not self.view or not s or s.idle then return end
+    if not self.now_playing or not s or s.idle then return end
     if s.is_playing then
         s.progress_ms = s.progress_ms + (socket.gettime() - s.fetched_at) * 1000
     end
     s.fetched_at = socket.gettime()
     s.is_playing = playing
-    self.view:update{ state = s }
-    self.view:refresh(false)
+    self.now_playing:update{ state = s }
+    self.now_playing:refresh(false)
 end
 
 return KoPlay
