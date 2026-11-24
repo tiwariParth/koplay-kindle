@@ -9,6 +9,7 @@ Spotify may rotate the refresh token on every refresh, so we write it back each 
 local DataStorage = require("datastorage")
 local JSON = require("json")
 local http = require("socket.http")
+local https = require("ssl.https")
 local logger = require("logger")
 local ltn12 = require("ltn12")
 local socket = require("socket")
@@ -75,6 +76,37 @@ function KoPlayApi:hasAuth()
     return self.auth ~= nil or self:loadAuth()
 end
 
+--- True when one of the certificate's names covers host: exact, or "*.example.com" for one level below.
+function KoPlayApi.certMatches(names, host)
+    host = host:lower()
+    for _i, name in ipairs(names) do
+        name = name:lower()
+        if name == host or (name:sub(1, 2) == "*." and host:match("^[^.]+(%..+)$") == name:sub(2)) then
+            return true
+        end
+    end
+    return false
+end
+
+-- LuaSec checks no certificate by default (verify = "none") and never checks the host name, so
+-- anyone on the same Wi-Fi could pose as Spotify and catch the refresh token. Check both.
+local newTlsConnection = https.tcp{ verify = "peer", cafile = "data/ca-bundle.crt" } -- ships with KOReader
+local function verifiedConnection()
+    local conn = newTlsConnection()
+    local connect = conn.connect
+    function conn:connect(host, port)
+        connect(self, host, port) -- throws when the certificate chain doesn't verify
+        local cert = self.sock:getpeercertificate()
+        local san = cert and cert:extensions()["2.5.29.17"] -- subjectAltName
+        if not (san and san.dNSName and KoPlayApi.certMatches(san.dNSName, host)) then
+            self.sock:close()
+            socket.try(nil, "certificate is not for " .. host)
+        end
+        return 1
+    end
+    return conn
+end
+
 --- Performs an HTTP request.
 -- @treturn int|nil HTTP status code (nil on network error)
 -- @treturn string response body (or error message)
@@ -100,6 +132,7 @@ function KoPlayApi:request(method, url, headers, body, large)
         headers = headers,
         source = body and ltn12.source.string(body) or nil,
         sink = socketutil.table_sink(sink),
+        create = verifiedConnection, -- every KoPlay URL is https
     })
     socketutil:reset_timeout()
     if resp_headers == nil then

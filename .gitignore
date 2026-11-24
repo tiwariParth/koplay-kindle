@@ -1,3 +1,4 @@
-tools/koplay.json
+# Spotify login (refresh token): never commit it, in any folder
+koplay.json*
 __pycache__/
 .emulator/

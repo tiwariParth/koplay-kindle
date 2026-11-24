@@ -14,7 +14,7 @@ end
 local stubs = {
     datastorage = { getSettingsDir = function() return dir end },
     json = { encode = serialize, decode = function(s) return assert((loadstring or load)("return " .. s))() end },
-    ["socket.http"] = {}, ltn12 = {}, socketutil = {},
+    ["socket.http"] = {}, ["ssl.https"] = { tcp = function() return function() end end }, ltn12 = {}, socketutil = {},
     logger = { warn = function() end },
     socket = { gettime = os.time },
 }
@@ -60,5 +60,13 @@ writeAuth("r3")
 assert(Api:hasAuth() and Api.auth.refresh_token == "r3")
 
 assert(Api.formatTime(61500) == "1:01")
+
+-- Certificate names: only the real Spotify hosts may pass
+local spotify = { "*.spotify.com", "spotify.com" }
+assert(Api.certMatches(spotify, "api.spotify.com") and Api.certMatches(spotify, "Accounts.Spotify.com"))
+assert(Api.certMatches(spotify, "spotify.com"))
+assert(not Api.certMatches(spotify, "a.b.spotify.com"), "wildcard covers one level only")
+assert(not Api.certMatches(spotify, "evilspotify.com") and not Api.certMatches(spotify, "spotify.com.evil.net"))
+assert(not Api.certMatches({ "*.evil.net" }, "api.spotify.com") and not Api.certMatches({}, "api.spotify.com"))
 os.execute("rm -r " .. dir)
 print("ok")
